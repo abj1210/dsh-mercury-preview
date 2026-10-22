@@ -1,0 +1,92 @@
+{
+  "format": 1,
+  "title": {
+    "en": "Mercury Diffusion Preview",
+    "zh-cn": "Mercury 扩散预览"
+  },
+  "description": {
+    "en": "A market index for the dsh-mercury-preview plugin.",
+    "zh-cn": "dsh-mercury-preview 的市场索引。"
+  },
+  "metadata": {
+    "categories": {
+      "diffusion": {
+        "title": {
+          "en": "Diffusion",
+          "zh-cn": "扩散预览"
+        }
+      }
+    },
+    "labels": {
+      "sidebar": {
+        "title": {
+          "en": "Sidebar",
+          "zh-cn": "侧边栏"
+        }
+      },
+      "framework:pi-ai": {
+        "title": {
+          "en": "pi-ai",
+          "zh-cn": "pi-ai"
+        }
+      }
+    },
+    "sortKeys": {
+      "stars": {
+        "title": {
+          "en": "Stars",
+          "zh-cn": "星标"
+        },
+        "order": "desc"
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "dsh-mercury-preview",
+      "title": {
+        "en": "Mercury 3 diffusion preview",
+        "zh-cn": "Mercury 3 扩散预览"
+      },
+      "description": {
+        "en": "Stream Inception Mercury 3 replies with diffusing:true and replay every denoising frame in a DSH sidebar tab.",
+        "zh-cn": "用 diffusing:true 请求 Inception Mercury 3，在 DSH 侧边栏逐帧回放去噪过程。"
+      },
+      "author": "abj1210",
+      "homepage": "https://github.com/abj1210/dsh-mercury-preview",
+      "repository": {
+        "url": "https://github.com/abj1210/dsh-mercury-preview"
+      },
+      "metadata": {
+        "category": "diffusion",
+        "keywords": [
+          "mercury",
+          "inception",
+          "diffusion",
+          "sidebar"
+        ],
+        "labels": [
+          "sidebar",
+          "framework:pi-ai"
+        ],
+        "sortKeys": {
+          "stars": 1
+        }
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1792647585,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/abj1210/dsh-mercury-preview",
+            "commit": "32fc69921cd994857d076431d6fc81b759406194"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.0 <0.3.0"
+          }
+        }
+      ]
+    }
+  ]
+}
