@@ -75,7 +75,7 @@ console.log('diffusing   downstream:', JSON.stringify(difDeltas));
 
 let tap = null;
 try {
-  tap = await (await fetch('http://127.0.0.1:8799/local/tap', { signal: AbortSignal.timeout(1500) })).json();
+  tap = await (await fetch('http://127.0.0.1:8799/local/tap', { headers: { 'x-mercury-panel': '1' }, signal: AbortSignal.timeout(1500) })).json();
 } catch (error) {
   console.log('http: 8799 不可达（多半被运行中的 host 占用），跳过 HTTP 断言');
 }

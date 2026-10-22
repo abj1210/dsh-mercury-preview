@@ -30,5 +30,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abj1210/dsh-mercury-preview.git"
   }
 }

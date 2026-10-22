@@ -42,6 +42,7 @@ partial.text += chunk.text;
 1. **补 `diffusing: true`**。agent 自己那条请求不带这个参数，而 pi-ai 的请求构造没有透传任意顶层字段的入口；转发口在 body 里补上，agent 的流才会带中间帧。
 2. **补 `Authorization`**。密钥存在 DSH 凭据文件的 `refs.INCEPTION_API_KEY`，面板不需要知道它。
 3. **截流**。`ctx.llm.streamWithRegistration` 是所有模型调用的唯一出口，包一层就能把每轮的原始帧留在内存里（`/local/live`），供自动跟随读取。
+4. **压住重复**。pi-ai 适配器会把快照帧当增量拼一遍再塞进 `block-end.block.text`，而装配器最后用的正是它——所以转发时要把它换回终稿，否则会话里会出现十几份首尾相接的全文。
 
 ## 安装
 
@@ -66,7 +67,7 @@ $DSH_HOME/.credentials.yaml
     INCEPTION_API_KEY: sk_...
 ```
 
-没有这个引用时会回退到原来的行为（面板里出现密钥输入框，存 `localStorage`）。密钥页：<https://platform.inceptionlabs.ai/dashboard/api-keys>。
+面板里**没有密钥输入框**：转发口会给每个请求补 `Authorization`，密钥只存在于凭据文件。没有该引用时请求原样发出，面板会显示 `invalid_api_key`。密钥页：<https://platform.inceptionlabs.ai/dashboard/api-keys>。
 
 ### 代理
 
@@ -79,6 +80,16 @@ $DSH_HOME/.credentials.yaml
 - **会话里仍是普通流式**。插件只能改自己那条面板；主对话的渲染由 DSH 本体决定（要改得动 `assembler.js`）。
 - 会话记录只在轮次结束后落盘，所以「自动跟随」读的是 host 内存里的截流（`/local/live`），不是文件。
 - 只对 `mercury*` 模型补 `diffusing`；其它 provider 的请求原样透传。
+
+## 排障
+
+| 现象 | 原因与查法 |
+|---|---|
+| `Failed to fetch` | 预检没过。`/local/*` 要求带 `x-mercury-panel: 1` 才会发预检；host 日志每行 `local OPTIONS <path> origin=<o>` 会打出真实 Origin。桌面外壳的 Origin 是 `dsh-app://app`，非 http(s) 一律放行 |
+| `连不上本机转发 127.0.0.1:8799` | host 半边没起来（端口被占 / 插件未加载）。看 `$DSH_HOME/mercury-preview.log` 与 DSH 启动日志里的 `forwarder unavailable` |
+| 面板有帧，会话里却是普通流式 | 主对话由 DSH 本体渲染，插件只保证转录不被快照帧拼坏，不改变它的视觉 |
+| `mercury-preview.log` 越来越大 | 超过 4 MB 会自动改名成 `.log.1`，只留一份 |
+| 刚改完代码不生效 | host 半边要重启 DSH；浏览器半边刷新页面即可 |
 
 ## 开发
 

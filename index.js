@@ -25,11 +25,13 @@ const TARGET_HOST = 'api.inceptionlabs.ai';
 const UPSTREAM_PROXY = { host: '127.0.0.1', port: 7890 };
 const LISTEN = { host: '127.0.0.1', port: 8799 };
 
-const PLUGIN_REV = 4;
+const PLUGIN_REV = 6;
 // host 重载插件时模块会被重新求值，但原型上那个 patch 还挂着旧闭包。
 // 把状态放在 globalThis 上，新旧闭包读写同一份，重载之后 tap 才不会「静默失联」。
 const TAP = globalThis[Symbol.for('dsh.mercury-preview.tap-state')]
   || (globalThis[Symbol.for('dsh.mercury-preview.tap-state')] = { rev: PLUGIN_REV, installed: false, calls: 0, frames: 0, chunks: 0, lastError: null, firstCallAt: null, last: null, injected: 0, lastInjectAt: null });
+// 复用的旧状态对象里 rev 还是上一版的值，会让「日志里 rev=4」看起来像没生效。
+TAP.rev = PLUGIN_REV;
 const MAX_BODY = 4 * 1024 * 1024;
 const MERCURY = /mercury/i;
 
@@ -72,8 +74,24 @@ function sleep(ms) {
 }
 
 const LOG_FILE = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'mercury-preview.log');
+const LOG_MAX_BYTES = 4 * 1024 * 1024;
+let LOG_CHECK_AT = 0;
 
 function logLine(message) {
+  // 转发口与截流每次请求都写一行，长期跑下来这个文件没有上限。
+  // 半分钟查一次大小，超了就把旧的挪成 .1（只留一份，不堆成 .2/.3）。
+  const now = Date.now();
+  if (now - LOG_CHECK_AT > 30000) {
+    LOG_CHECK_AT = now;
+    try {
+      const stat = fs.statSync(LOG_FILE, { throwIfNoEntry: false });
+      if (stat && stat.size > LOG_MAX_BYTES) {
+        try { fs.renameSync(LOG_FILE, LOG_FILE + '.1'); } catch (error) { /* ignore */ }
+      }
+    } catch (error) {
+      /* stat 失败就当没有日志文件 */
+    }
+  }
   try {
     fs.appendFileSync(LOG_FILE, new Date().toISOString() + ' ' + message + '\n');
   } catch (error) {
@@ -130,12 +148,25 @@ function isLocalOrigin(value) {
   return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
 }
 
+// 谁能读 /local/*：桌面客户端与浏览器两种情况都要放行。
+// - 浏览器打开 GUI：Origin 是 http://127.0.0.1:<port>（或 localhost），走 isLocalOrigin。
+// - DSH 桌面外壳走自定义协议：实测 Origin 是 `dsh-app://app`（既不是 null，也不是
+//   file://，更不是 app://）。把白名单写死成某几个前缀必然漏，所以反过来判：
+//   网页的 Origin 一定是 http(s)（或 null），**非 http(s) 的 Origin 一律放行**。
+//   这样 file://、app://、dsh-app://、electron:// 都自然覆盖，而 https://evil.com
+//   这种真正的网页仍然只能在 isLocalOrigin 通过时才放行。
 function corsFor(req) {
   const origin = req && req.headers ? req.headers.origin : undefined;
   const out = Object.assign({}, CORS_BASE);
-  if (isLocalOrigin(origin)) {
+  const isWebOrigin = typeof origin === 'string' && /^https?:\/\//i.test(origin);
+  const allowed = origin === undefined
+    || origin === 'null'
+    || !isWebOrigin
+    || isLocalOrigin(origin);
+  if (allowed && origin !== undefined) {
     out['access-control-allow-origin'] = origin;
     out['access-control-allow-credentials'] = 'true';
+    out['access-control-max-age'] = '600';
   }
   return out;
 }
@@ -162,7 +193,14 @@ function storedKey() {
   return value;
 }
 
+// 每次 /local/latest 都从头递归整棵 sessions 树的话，会话一多就变成
+// 「切一次窗口扫几千个目录」。文件名的 mtime 不会在 5 秒内发生有意义的变化，
+// 这一点点陈旧完全可以接受。
+let SESSION_CACHE = { at: 0, value: null };
+
 function findLatestSessionFile(root) {
+  const now = Date.now();
+  if (now - SESSION_CACHE.at < 5000) return SESSION_CACHE.value;
   let best = null;
   const stack = [root];
   while (stack.length > 0) {
@@ -189,6 +227,7 @@ function findLatestSessionFile(root) {
       if (best === null || stat.mtimeMs > best.mtimeMs) best = { file: full, mtimeMs: stat.mtimeMs };
     }
   }
+  SESSION_CACHE = { at: now, value: best };
   return best;
 }
 
@@ -531,15 +570,7 @@ function teeStream(inner, options) {
           lastChunk = chunk;
           const same = t === lastT;
           if (!same) {
-            if (forceBuffer) {
-              // mercury：转发口已经补了 diffusing:true，每一帧都是整篇全文，
-              // 只是还夹着没收敛的噪声字符 —— 所以既不是前缀、相似度也不高。
-              // 这种流只能整段替换。之前靠「长度相近」去猜，猜错一帧就会落进
-              // 下面的接续分支，把好几份全文首尾拼起来，转录和面板都会重影。
-              record.snapshot = true;
-              shown = t;
-              base = '';
-            } else if (lastT !== '' && t.startsWith(lastT)) {
+            if (lastT !== '' && t.startsWith(lastT)) {
               // 窗口推进：同起点、终点更远
               record.window = true;
               shown = base + t;
@@ -558,10 +589,7 @@ function teeStream(inner, options) {
             lastT = t;
           }
           if (same) {
-            // 去噪收敛后服务端会连着推同一份全文；缓冲模式下这些也必须压住，
-            // 否则每来一条重复帧就把整篇往转录里再追加一遍 —— 会话里那 19505 字
-            // 就是 17 帧各自追加一次叠出来的。
-            if (forceBuffer) continue;
+            // 服务端把同一份文本重发了一次，没有新信息，原样交给下游。
             yield chunk;
             continue;
           }
@@ -610,7 +638,7 @@ function teeStream(inner, options) {
       commitStream(record);
       logLine('tap done #' + TAP.calls + ' rev=' + PLUGIN_REV + ' frames=' + record.frames.length + ' chunks=' + record.chunks
         + ' seen=' + record.seen + ' snapshot=' + record.snapshot
-        + ' force=' + /mercury/i.test(String(record.model))
+        + ' force=' + forceBuffer
         + ' emit=' + record.emitted
         + ' types=' + JSON.stringify(record.types) + ' first=' + record.first);
     }
@@ -691,6 +719,27 @@ function latestPayload() {
 
 function handleLocal(req, res) {
   const pathname = String(req.url || '').split('?')[0];
+  // 面板的请求带 x-mercury-panel 头（非简单请求），浏览器会先发 OPTIONS 预检。
+  // 预检必须在这里答，否则连本机页面都被判 CORS 失败；跨站页面拿不到 ACAO，
+  // 预检就过不去——这道头正好成了拦住外部网页读会话文本的闸。
+  if (req.method === 'OPTIONS') {
+    // 预检本身也记一行：预检不过时浏览器直接掐断，后端看不到 GET，
+    // 排障全靠这一行知道请求到底带的是哪个 Origin。
+    logLine('local OPTIONS ' + pathname + ' origin=' + (req.headers && req.headers.origin !== undefined ? req.headers.origin : '-'));
+    res.writeHead(204, Object.assign({}, corsFor(req), {
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'access-control-allow-headers': 'x-mercury-panel'
+    }));
+    res.end();
+    return;
+  }
+  const origin = req.headers ? req.headers.origin : undefined;
+  logLine('local ' + req.method + ' ' + pathname + ' origin=' + (origin === undefined ? '-' : origin) + ' flag=' + (req.headers && req.headers['x-mercury-panel'] ? '1' : '0'));
+  if (req.headers && req.headers['x-mercury-panel'] !== '1') {
+    res.writeHead(403, Object.assign({ 'content-type': 'application/json; charset=utf-8' }, corsFor(req)));
+    res.end(JSON.stringify({ error: 'missing panel header' }));
+    return;
+  }
   if (pathname === '/local/live') {
     // 正在生成的那条流：帧数组直接引用 record.frames，边收边能读到。
     // 上一轮已经收工、而且期间 agent 又跑过几轮时，TAP.live 会指向那些
@@ -776,10 +825,14 @@ function forward(agent, req, res) {
   let aborted = false;
 
   req.on('data', (part) => {
+    if (aborted) return;
     size += part.length;
     if (size > MAX_BODY) {
+      // 不 destroy：立刻回 413 再继续吞掉剩下的字节，让连接自己收尾。
+      // 直接掐 socket 的话浏览器只能看到「网络错误」，分不清是超限还是断网。
       aborted = true;
-      req.destroy();
+      res.writeHead(413, Object.assign({ 'content-type': 'application/json; charset=utf-8' }, corsFor(req)));
+      res.end(JSON.stringify({ error: 'request body too large', limit: MAX_BODY }));
       return;
     }
     parts.push(part);
@@ -828,6 +881,17 @@ function forward(agent, req, res) {
 }
 
 export function apply(ctx) {
+  // apply 可能被调用两次：一次来自 profile 的 bundle 列表，一次来自本包的
+  // cordis.patch.yml（`- insert:`）。两次会各建一个 http server、各装一份 tap，
+  // 结果就是「日志里有 tap 记录，但 /local/tap 显示 calls: 0」这种诡异现象
+  // （两个实例各持一份状态）。第二个实例直接放弃，只留第一个。
+  const applied = Symbol.for('dsh.mercury-preview.applied');
+  if (globalThis[applied]) {
+    console.log('[mercury-preview] duplicate apply skipped');
+    return;
+  }
+  globalThis[applied] = true;
+
   let server = null;
   try {
     const agent = new TunnelAgent({ keepAlive: true, maxSockets: 4 });
