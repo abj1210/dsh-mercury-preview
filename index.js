@@ -192,8 +192,29 @@ function findLatestSessionFile(root) {
   return best;
 }
 
+// 会话文件可能几十 MB，而面板只关心最近几轮。超过这个尺寸就只读尾部，
+// 免得每次 /local/latest 都把整份文件搬进内存。
+const TAIL_BYTES = 8 * 1024 * 1024;
+
 function tailFrames(file, frameCount) {
-  const buf = fs.readFileSync(file);
+  let buf = null;
+  try {
+    const size = fs.statSync(file).size;
+    if (size > TAIL_BYTES) {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const chunk = Buffer.alloc(TAIL_BYTES);
+        const n = fs.readSync(fd, chunk, 0, TAIL_BYTES, size - TAIL_BYTES);
+        buf = chunk.subarray(0, n);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      buf = fs.readFileSync(file);
+    }
+  } catch (error) {
+    return '';
+  }
   const starts = [];
   let at = buf.indexOf(ZSTD_MAGIC);
   while (at !== -1) {
