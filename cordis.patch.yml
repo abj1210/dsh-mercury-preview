@@ -1,0 +1,12 @@
+# dsh-mercury-preview bundle patch: inserts one client-only sidebar tab.
+#
+# The entry name is PATH-RELATIVE on purpose. DSH anchors a relative `name:` to
+# the directory of the patch file that declared it, so this row always loads
+# this bundle's own `index.js` whatever the package folder is called.
+#
+# The browser half needs no row here. package.json declares
+# `dsh.client.platform: web` and `exports["./client"]`, so the same Loader row is
+# scanned into the client module graph and served from `/plugins`.
+- insert:
+    - id: mercury-preview
+      name: './index.js'
